@@ -8,13 +8,17 @@ merge with the ground-truth tree must be accepted; every other state is a
 negative control and must be rejected. The last group of controls covers
 repositories in which Git itself reports the expected tree or history although
 the commits on the branch do not record it (replacement objects, grafts, a
-forged commit-graph, tampered commit objects).
+forged commit-graph, tampered commit objects). The group after that covers the
+reward file: a reward planted in the log directory before grading is replaced
+by the verdict and does not survive a verifier that stops without one.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,6 +30,7 @@ import pytest
 
 ADAPTER_SRC = Path(__file__).resolve().parents[1] / "src"
 EVALUATE_PY = ADAPTER_SRC / "gitgoodbench/task-template/tests/evaluate.py"
+TEST_SH = ADAPTER_SRC / "gitgoodbench/task-template/tests/test.sh"
 BRANCH = "current-scenario-branch"
 CONFLICTED_FILE = "app.py"
 RESOLUTION = "value = 3\n"
@@ -88,7 +93,7 @@ class Scenario:
 
         # Same end state as environment/setup_scenario.py.
         self.git("checkout", "-q", "-b", BRANCH, self.base)
-        self.git("update-ref", "refs/gitgoodbench/incoming", self.incoming)
+        self.git("update-ref", "refs/scenario/incoming", self.incoming)
         self.git("branch", "-q", "-D", "setup")
         self.git("reflog", "expire", "--expire=now", "--all")
         self.git("gc", "--prune=now", "--quiet")
@@ -466,6 +471,111 @@ def test_tampered_head_commit_is_rejected(
     solved, details = grade(verifier, scenario, monkeypatch)
 
     assert not solved
+
+
+# Reward file ---------------------------------------------------------------
+
+
+@pytest.fixture
+def log_dir(
+    verifier: ModuleType,
+    scenario: Scenario,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """The verifier's log directory with a reward of 1 already in it, as an
+    agent could leave it while it works, and the entry point (``main``)
+    pointed at the scenario."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "reward.txt").write_text("1\n")
+    (log_dir / "reward.json").write_text('{"reward": 1}\n')
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(scenario.config))
+    monkeypatch.setattr(verifier, "REPO_DIR", scenario.repo)
+    monkeypatch.setattr(verifier, "LOG_DIR", log_dir)
+    monkeypatch.setattr(verifier, "CONFIG_PATH", config)
+    return log_dir
+
+
+def rewards_in(log_dir: Path) -> list[str]:
+    return sorted(p.name for p in log_dir.iterdir() if p.name.startswith("reward"))
+
+
+def test_planted_reward_is_replaced_by_the_verdict(verifier: ModuleType, log_dir: Path):
+    # The scenario is untouched: the merge is still in progress.
+    assert verifier.main() == 0
+
+    assert rewards_in(log_dir) == ["reward.txt"]
+    assert (log_dir / "reward.txt").read_text() == "0\n"
+
+
+def test_planted_reward_directory_is_replaced_by_the_verdict(
+    verifier: ModuleType, scenario: Scenario, log_dir: Path
+):
+    scenario.conclude_merge()
+    (log_dir / "reward.txt").unlink()
+    (log_dir / "reward.txt").mkdir()
+    (log_dir / "reward.txt" / "keep").write_text("1\n")
+
+    assert verifier.main() == 0
+
+    assert rewards_in(log_dir) == ["reward.txt"]
+    assert (log_dir / "reward.txt").read_text() == "1\n"
+
+
+def test_planted_reward_does_not_survive_a_verifier_error(
+    verifier: ModuleType, log_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fail(config: dict, details: dict) -> bool:
+        raise verifier.VerifierError("git init failed")
+
+    monkeypatch.setattr(verifier, "evaluate_merge", fail)
+
+    assert verifier.main() == 1
+
+    assert rewards_in(log_dir) == []
+    assert json.loads((log_dir / "details.json").read_text())["error"] == (
+        "git init failed"
+    )
+
+
+def test_planted_reward_does_not_survive_a_crashing_verifier(
+    verifier: ModuleType,
+    log_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Git is gone from the image (an agent can delete it), so the verifier
+    # cannot run it: an error nothing in the verifier expects.
+    empty = tmp_path / "no-git-here"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    assert verifier.main() == 1
+
+    assert rewards_in(log_dir) == []
+    error = json.loads((log_dir / "details.json").read_text())["error"]
+    assert error.startswith("FileNotFoundError")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="test.sh is a bash script")
+def test_test_sh_discards_planted_rewards_before_it_grades(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "reward.txt").write_text("1\n")
+    (log_dir / "reward.json").write_text('{"reward": 1}\n')
+    # The task's test.sh with the container paths redirected and the verifier
+    # replaced by one that dies before it writes anything.
+    script = TEST_SH.read_text()
+    assert "/logs/verifier" in script and "python3 /tests/evaluate.py" in script
+    script = script.replace("/logs/verifier", shlex.quote(str(log_dir)))
+    script = script.replace("python3 /tests/evaluate.py", "exit 3")
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 3, result.stderr
+    assert list(log_dir.iterdir()) == []
 
 
 # The verifier's own readers --------------------------------------------------

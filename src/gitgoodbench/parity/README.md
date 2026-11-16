@@ -123,11 +123,25 @@ harbor-framework/harbor#3867).
   ordering of the parents and every conflict hunk in `<CONFLICT-i>` tags.
   The reference harness extracts the hunks from the working tree after
   `git merge`; the adapter replays the same merge with `git merge-tree` at
-  task-generation time and extracts them the same way. The instructions of
+  task-generation time and extracts them the same way. The replay uses
+  Git's defaults (no configuration or attributes file of the generating
+  machine is read) and fails if it disagrees with the dataset about the
+  conflicted files it lists or the number of hunks. The instructions of
   all 60 Lite tasks are identical to the prompts the reference harness wrote
   for them, except for the repository path (`/workspace/repo` instead of
   `/usr/code/<repository>`). Earlier runs (listed under History) used an
   instruction that withheld the hunks and the ordering.
+* **Ref of the incoming parent.** Both sides keep the incoming parent
+  reachable through a ref while the merge is in progress. In the parity runs
+  it was called `refs/gitgoodbench/incoming` on both sides. The Harbor tasks
+  were changed on 2026-11-15, after the parity runs, to call it
+  `refs/scenario/incoming`, so that no ref in the task repository names the
+  benchmark; the reference harness keeps the name the runs used. The
+  instruction never mentions the ref. Its name shows up in the transcript of
+  64 of the 180 runs on each side (for example in `git log --all` or
+  `git branch -a` output), and the agent typed it in a command in 14
+  original and 6 Harbor runs, as a handle for the incoming commit, which
+  `MERGE_HEAD` and the conflict markers name as well.
 * **Shell.** Both sides execute the agent's commands with `/bin/sh -c`:
   mini-swe-agent's `LocalEnvironment` inside the Harbor sandbox, and the
   harness's `ExistingContainerEnvironment` through `docker exec` (an earlier
@@ -194,7 +208,7 @@ Oracle and negative control (environment and verifier check, 1 run each):
 | Side | Oracle | No-op agent |
 |------|--------|-------------|
 | Original (reference harness) | 60/60 (`results/oracle-original-side.jsonl`, 2026-10-18) | 0/2 on the smoke samples |
-| Harbor adapter (Daytona) | 60/60, no exceptions (`results/oracle-harbor-daytona.json`, 2026-11-11, on the registered tasks with the current verifier; also 60/60 on 2026-10-26 before the verifier stopped relying on Git's view of the history) | 0 on the negative controls in the adapter README |
+| Harbor adapter (Daytona) | 60/60, no exceptions (`results/oracle-harbor-daytona.json`, 2026-11-15, on the registered tasks with the current verifier and task images; one trial, `apache-ignite-merge-0001`, was re-run with `harbor jobs resume` after its sandbox did not start within the build timeout. Also 60/60 on 2026-11-11, before the reward file was cleared before grading and the incoming ref was renamed, and on 2026-10-26, before the verifier stopped relying on Git's view of the history) | 0 on the negative controls in the adapter README |
 
 Six samples (`android_wear_os_samples_merge_0000`, `dask_dask_merge_0000`, `duckduckgo_android_merge_0003`, `farama_foundation_gymnasium_merge_0000`, `jetbrains_exposed_merge_0004`, `vitorpamplona_amethyst_merge_0002`) have a scenario commit that is no longer reachable from any branch of the repository, so the original clone-based setup cannot check it out; the reference harness fetches such commits by id (`ensure_scenario_commits`), which is what the Harbor task images do. Without that fallback these six samples would fail on the original side.
 

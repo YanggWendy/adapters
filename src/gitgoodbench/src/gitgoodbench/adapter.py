@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -63,12 +64,41 @@ def normalize_task_id(value: str) -> str:
     return sanitize_task_id(value)
 
 
+def git_environment() -> dict[str, str]:
+    """Environment of every Git command the generator runs.
+
+    The conflict hunks quoted in ``instruction.md`` come from replaying the
+    merge on the machine that generates the tasks, while the task image runs
+    that merge with Git's defaults (its Dockerfile only sets an identity and an
+    editor). Settings of the generating machine must therefore not reach Git:
+    ``merge.conflictStyle``, rename detection, a merge driver or an attributes
+    file would change the hunks. No configuration or attributes file outside
+    the scratch repository is read and no ``GIT_*`` variable is inherited, so
+    the same samples give the same tasks everywhere.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_ATTR_NOSYSTEM="1",
+        # The user's attributes file is read from its default location even
+        # when there is no global configuration file.
+        GIT_CONFIG_COUNT="1",
+        GIT_CONFIG_KEY_0="core.attributesFile",
+        GIT_CONFIG_VALUE_0=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+    )
+    return env
+
+
 def git(*args: str, cwd: Path) -> str:
     return git_bytes(*args, cwd=cwd).decode("utf-8", errors="replace").strip()
 
 
 def git_bytes(*args: str, cwd: Path) -> bytes:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True)
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, env=git_environment(), capture_output=True
+    )
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
@@ -166,6 +196,8 @@ class ScenarioFacts:
     ground_truth_tree: str
     commit_temporal_ordering: str
     conflicts: list[ConflictSection]
+    # Paths Git reports as conflicted that the dataset does not list.
+    unlisted_conflict_files: tuple[str, ...] = ()
 
     @property
     def files_with_conflicts(self) -> list[str]:
@@ -312,7 +344,7 @@ class GitGoodBenchAdapter:
         }
         return render(template, values)
 
-    def _task_toml(self, task: GitGoodBenchTask) -> str:
+    def _task_toml(self, task: GitGoodBenchTask, facts: ScenarioFacts) -> str:
         template = (TEMPLATE_DIR / "task.toml").read_text()
         description = (
             f"Resolve the merge conflicts of a real-world merge in {task.repository}."
@@ -327,6 +359,7 @@ class GitGoodBenchAdapter:
             "repository": toml_string(task.repository),
             "source_id": toml_string(task.source_id),
             "source_dataset": toml_string(task.source_dataset),
+            "unlisted_conflict_files": json.dumps(list(facts.unlisted_conflict_files)),
         }
         return render(template, values)
 
@@ -435,20 +468,29 @@ class GitGoodBenchAdapter:
                 int(git("show", "-s", "--format=%ct", parent, cwd=scratch))
                 for parent in parents
             ]
+            conflicts, unlisted = self._replay_merge(task, scratch)
             return ScenarioFacts(
                 ground_truth_tree=ground_truth_tree,
                 commit_temporal_ordering=commit_temporal_ordering(*timestamps),
-                conflicts=self._replay_merge(task, scratch),
+                conflicts=conflicts,
+                unlisted_conflict_files=unlisted,
             )
 
     def _replay_merge(
         self, task: GitGoodBenchTask, scratch: Path
-    ) -> list[ConflictSection]:
+    ) -> tuple[list[ConflictSection], tuple[str, ...]]:
         """Run the scenario's merge with ``git merge-tree`` and collect the hunks.
 
         Like the original harness, the files listed by the dataset are scanned
-        in that order; files it lists that the merge does not touch simply
-        contribute no hunks.
+        in that order. The replay has to agree with the dataset, otherwise the
+        instruction would quote something else than the original prompt and
+        the task is not generated: every listed file must be in conflict and
+        the number of hunks must be the recorded one.
+
+        Git can report further conflicted paths that the dataset does not list
+        (for example a file modified on one side and deleted on the other).
+        The original prompt does not mention them either; they are returned so
+        that the task records them.
         """
         local, incoming = task.scenario["parents"]
         result = subprocess.run(
@@ -456,12 +498,14 @@ class GitGoodBenchAdapter:
                 "git",
                 "merge-tree",
                 "--write-tree",
+                "-z",  # paths as they are, not quoted
                 "--name-only",
                 "--no-messages",
                 local,
                 incoming,
             ],
             cwd=scratch,
+            env=git_environment(),
             capture_output=True,
             text=True,
             errors="replace",
@@ -470,37 +514,35 @@ class GitGoodBenchAdapter:
             raise RuntimeError(
                 f"{task.task_id}: git merge-tree failed: {result.stderr.strip()}"
             )
-        merged_tree, *conflicted = result.stdout.split("\n")
+        merged_tree, *conflicted = result.stdout.split("\0")
         conflicted = [path for path in conflicted if path]
         listed = list(task.scenario["files_in_merge_conflict"])
-        if sorted(conflicted) != sorted(listed):
+        not_in_conflict = [path for path in listed if path not in conflicted]
+        if not_in_conflict:
+            raise RuntimeError(
+                f"{task.task_id}: the dataset lists conflicts in {not_in_conflict}, "
+                f"git merge-tree reports conflicts in {conflicted}"
+            )
+        unlisted = tuple(path for path in conflicted if path not in listed)
+        if unlisted:
             print(
-                f"WARNING: {task.task_id}: git merge-tree reports conflicts in "
-                f"{conflicted}, the dataset lists {listed}",
+                f"NOTE: {task.task_id}: git merge-tree also reports conflicts in "
+                f"{list(unlisted)}, which the dataset does not list; recorded in "
+                "task.toml (metadata.unlisted_conflict_files)",
                 file=sys.stderr,
             )
 
         sections: list[ConflictSection] = []
         for path in listed:
-            try:
-                content = git_bytes(
-                    "cat-file", "-p", f"{merged_tree}:{path}", cwd=scratch
-                )
-            except RuntimeError:
-                print(
-                    f"WARNING: {task.task_id}: {path} does not exist after the merge",
-                    file=sys.stderr,
-                )
-                continue
+            content = git_bytes("cat-file", "-p", f"{merged_tree}:{path}", cwd=scratch)
             sections.extend(conflict_sections(path, content, local_label=local))
         expected = task.scenario["total_number_of_merge_conflicts"]
         if len(sections) != expected:
-            print(
-                f"WARNING: {task.task_id}: found {len(sections)} conflict hunks, "
-                f"the dataset says {expected}",
-                file=sys.stderr,
+            raise RuntimeError(
+                f"{task.task_id}: found {len(sections)} conflict hunks, "
+                f"the dataset says {expected}"
             )
-        return sections
+        return sections, unlisted
 
     def generate_task(self, task: GitGoodBenchTask) -> Path:
         task_dir = self.output_dir / task.task_id
@@ -547,7 +589,7 @@ class GitGoodBenchAdapter:
         facts = self.prepare_scenario(task, task_dir / "solution" / GROUND_TRUTH_BUNDLE)
 
         (task_dir / "instruction.md").write_text(self._instruction(task, facts))
-        (task_dir / "task.toml").write_text(self._task_toml(task))
+        (task_dir / "task.toml").write_text(self._task_toml(task, facts))
 
         env_template = TEMPLATE_DIR / "environment"
         shutil.copy2(
