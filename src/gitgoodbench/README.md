@@ -162,11 +162,11 @@ Tasks are written with one directory per task. Each task follows the structure s
 
 The original baseline agent is not publicly runnable (the released `src/agent_client` has its LLM client, agent loop and internal data source removed, as confirmed by the benchmark's first author on the adapter PR), so this is a Scenario 2/3 adapter: the original side of the parity experiment is a reconstructed reference harness that fills in those two pieces and runs a standard CLI coding agent inside the original scenario container, with the original scenario setup (`ScenarioEnvironmentManager`) and scoring (`Evaluator`) unchanged. The harness is a single commit on top of upstream, shipped as [`parity/reference-harness.patch`](parity/reference-harness.patch); [`parity/README.md`](parity/README.md) describes it, how to run both sides, and the known differences between them.
 
-Parity setup (agreed plan): mini-swe-agent 2.4.6 with `deepseek-v4.1-flash` through the 2077AI parity gateway on both sides (chat completions; Codex CLI cannot be used because it no longer supports chat completions and the gateway has no Responses API for this model), 3 runs over the 60 Lite merge tasks, solve rate as the metric.
+Parity setup (agreed plan): mini-swe-agent 2.4.6 with `deepseek-v4-1-flash-260910` on both sides, requested through the 2077AI parity gateway under its name for the model, `deepseek-v4.1-flash`; every response of the 360 runs reports the dated id (chat completions; Codex CLI cannot be used because it no longer supports chat completions and the gateway has no Responses API for this model), 3 runs over the 60 Lite merge tasks, solve rate as the metric.
 
 | Agent | Model | Metric | Runs | Dataset Size | Original (mean ± SEM) | Harbor (mean ± SEM) |
 |-------|-------|--------|------|--------------|-----------------------|---------------------|
-| mini-swe-agent@2.4.6 | deepseek-v4.1-flash | Solve rate (%) | 3 | 60 (100%) | 40.56 ± 2.0031 | 41.67 ± 0.9623 |
+| mini-swe-agent@2.4.6 | deepseek-v4-1-flash-260910 | Solve rate (%) | 3 | 60 (100%) | 40.56 ± 2.0031 | 41.67 ± 0.9623 |
 
 Per-run scores (solve rate in %): original 36.67, 41.67, 43.33; Harbor 40.00, 43.33, 41.67. The run ranges overlap (sample standard deviations 3.47 and 1.67). Links: [original benchmark](https://github.com/JetBrains-Research/git-good-bench) (`b11ae6cd92be2b8b96e237d379427e04ad59c455`), [fork with the reference harness](https://github.com/YanggWendy/git-good-bench/tree/0375616a91a58e495b370908918d01991bc6ebf4) (branch `harbor-parity`: that commit plus [`parity/reference-harness.patch`](parity/reference-harness.patch), with the reproduction steps in its README), [adapter PR](https://github.com/harbor-framework/adapters/pull/78); [dataset PR](https://github.com/harbor-framework/harbor-datasets/pull/277) (harbor-datasets); [HuggingFace parity-experiments PR](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/281). The shared parity repository is over the Hub's file-count limit and refuses uploads at the moment, so the result files are published in the same layout at [yanggwendy/gitgoodbench-parity](https://huggingface.co/datasets/yanggwendy/gitgoodbench-parity/tree/main/adapters/gitgoodbench) until they can be pushed to that PR.
 
@@ -194,7 +194,7 @@ Reproduction requirements and steps:
       --hide-ground-truth --runs 3 --run-name mswea-deepseek-v4.1-flash-aligned
   python -m src.agent_client.summarize_cli_agent_results results/mswea-deepseek-v4.1-flash-aligned/results.jsonl
   ```
-- Harbor side (3 attempts on Daytona, gateway host allowed during the agent phase):
+- Harbor side (3 attempts on Daytona, gateway host allowed during the agent phase; `parity/README.md` gives the Harbor commit and the one-line litellm pin of the parity runs):
   ```bash
   export OPENAI_API_KEY=<parity gateway key> OPENAI_BASE_URL=https://app-us.ppapi.ai/v1
   harbor run -c src/gitgoodbench/parity/run_gitgoodbench_parity.yaml
@@ -224,7 +224,7 @@ uv remove datasets  # remove a dependency
 
 Environment setup:
 - Docker installed and running
-- Harbor installed and working (see main repository README)
+- Harbor 0.21.0 or newer installed and working (see main repository README). The tasks use task schema 1.4 with a `version` under `[task]`, which 0.21.0 is the first release to read (0.20.0 loads the file but ignores that field), and they restrict the agent phase with `[agent] network_mode = "allowlist"`, which that release reads as well. To run mini-swe-agent use 0.26.0 or newer, the first release whose install of the agent works with current litellm (harbor-framework/harbor#3867). The parity runs used Harbor at `357c5e74020fc0890d69fb3a7db610896b9ce57d` (between 0.24.0 and 0.25.0) with litellm pinned as described in [`parity/README.md`](parity/README.md)
 - Python environment with dependencies:
   ```bash
   cd src/gitgoodbench

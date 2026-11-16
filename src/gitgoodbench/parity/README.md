@@ -43,8 +43,10 @@ merge evaluation.
   executes every command in the scenario container with `docker exec`
   (`agents/mswea_environment.py`), with the container's `uname` fed to the
   prompt template.
-* Model: `deepseek-v4.1-flash` (served as `deepseek-v4-1-flash-260910`, a
-  reasoning model) through the 2077AI parity gateway
+* Model: `deepseek-v4-1-flash-260910` (a reasoning model). Both sides request it under
+  the gateway's name for it, `deepseek-v4.1-flash`, and every response of
+  the 360 runs reports the dated id. It is reached through the 2077AI parity
+  gateway
   (`https://app-us.ppapi.ai/v1`, see [`parity_api_instructions.md`](../../parity_api_instructions.md)),
   over the chat completions API.
 * Metric: solve rate, i.e. the fraction of samples whose committed merge
@@ -91,12 +93,32 @@ harbor run -c src/gitgoodbench/parity/run_gitgoodbench_parity.yaml
 mini-swe-agent version, allows the gateway host during the agent phase (the
 tasks otherwise only allow `api.openai.com` and `api.anthropic.com`) and runs
 3 attempts on Daytona. Daytona sandboxes are limited to 10 GB of disk, which
-is why the task template requests `storage_mb = 10240`. Harbor installs
-mini-swe-agent with the newest litellm; at the time of our runs litellm
-1.106.0 failed to import (`No module named 'mcp'`), so the runs pinned
-`litellm==1.91.1` in the install command of Harbor's mini-swe-agent agent,
-matching the original side (Harbor has since fixed the install,
-harbor-framework/harbor#3867).
+is why the task template requests `storage_mb = 10240`.
+
+Harbor version. The parity runs used harbor-framework/harbor at
+`357c5e74020fc0890d69fb3a7db610896b9ce57d` (upstream main of 2026-10-18,
+between releases 0.24.0 and 0.25.0) with one local change. Harbor installs
+mini-swe-agent with an unpinned litellm, and litellm 1.106.0, the newest at
+the time, failed to import (`No module named 'mcp'`), so the install command
+was pinned to the litellm version of the original side:
+
+```bash
+git clone https://github.com/harbor-framework/harbor.git && cd harbor
+git checkout 357c5e74020fc0890d69fb3a7db610896b9ce57d
+# src/harbor/agents/installed/mini_swe_agent.py, the `uv tool install` command
+sed -i.bak 's/--with litellm --with orjson --with fastapi/--with litellm==1.91.1 --with orjson --with fastapi/' \
+    src/harbor/agents/installed/mini_swe_agent.py
+uv sync
+```
+
+Upstream fixed the install in harbor-framework/harbor#3867
+(`dba6b9de4bd014d0a9d430b6eb85f6a4ed883b35`, first released in 0.26.0) by
+requesting `litellm[mcp]`. With 0.26.0 or newer Harbor needs no change to
+install the agent, but the agent then gets the newest litellm instead of
+1.91.1; pin it the same way to reproduce the configuration of the parity
+runs (we have not re-run the parity job on such a version). The tasks
+themselves need Harbor 0.21.0 or newer (task schema 1.4 with a task
+`version`).
 
 ## Known differences between the two sides
 
@@ -214,8 +236,8 @@ Six samples (`android_wear_os_samples_merge_0000`, `dask_dask_merge_0000`, `duck
 
 ### Parity result (aligned configuration)
 
-mini-swe-agent 2.4.6 + deepseek-v4.1-flash, 3 runs over the 60 Lite merge
-samples with the aligned setup described above (original side:
+mini-swe-agent 2.4.6 + deepseek-v4-1-flash-260910, 3 runs over the 60 Lite
+merge samples with the aligned setup described above (original side:
 `--hide-ground-truth`, `/bin/sh`; Harbor side: the verbatim prompt;
 2026-10-26; `results/mswea-deepseek-v4.1-flash-aligned-*.jsonl`):
 
@@ -248,14 +270,17 @@ a laptop that went to sleep twice with the lid closed; the agents' gateway
 connections died during the sleeps, the affected shard processes were
 killed and relaunched (the harness resumes from its JSONL results), and the
 three runs that the sleep had turned into timeouts were removed and re-run
-(all three unsolved before and after). On the Harbor side one trial failed
+(all three unsolved before and after). The three replaced records are kept
+in `results/mswea-deepseek-v4.1-flash-aligned-original-side-superseded.jsonl`
+(`micrometer_metrics_micrometer_merge_0054` runs 2 and 3 and
+`octodns_octodns_merge_0001` run 1, timed out after 7.5 to 13 hours of
+wall-clock time); counting them instead of the re-runs gives the same 22, 25
+and 26 solved. On the Harbor side one trial failed
 with a Daytona `502` while its sandbox was created and was re-run with
 `harbor jobs resume -f DaytonaBadGatewayError`; the job finished with 180
-trials and no exceptions. Harbor's mini-swe-agent install pulled a litellm
-that fails to import (`No module named 'mcp'`), so the Harbor runs used a
-local pin to `litellm==1.91.1` in `src/harbor/agents/installed/mini_swe_agent.py`
-(the version the original side uses); Harbor has since fixed the install
-(harbor-framework/harbor#3867).
+trials and no exceptions. The Harbor runs used a local pin to
+`litellm==1.91.1` in Harbor's mini-swe-agent install command (see "Running
+the Harbor side").
 
 Files in `results/`: `oracle-original-side.jsonl` and `oracle-harbor-daytona.json`
 (oracle checks), `mswea-deepseek-v4.1-flash-aligned-original-side.jsonl`
@@ -263,7 +288,9 @@ Files in `results/`: `oracle-original-side.jsonl` and `oracle-harbor-daytona.jso
 record carries a `teardown_error` because the upstream teardown checks out
 `main`, which `--hide-ground-truth` has deleted; the harness then re-clones
 for the next sample, and the error occurs after the Evaluator has scored
-the run),
+the run), `mswea-deepseek-v4.1-flash-aligned-original-side-superseded.jsonl`
+(the three records of that file's runs that were replaced by a re-run, each
+marked `superseded`; not part of the results),
 `mswea-deepseek-v4.1-flash-aligned-harbor-daytona.jsonl` and
 `-job.json` (every Harbor trial and the job summary), and the two
 `-leakage-scan.jsonl` files (per-run lookup scan of the trajectories). The
