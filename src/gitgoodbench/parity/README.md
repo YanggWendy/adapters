@@ -12,7 +12,10 @@ The baseline agent of the paper is not runnable: the released
 (an early internal version of Koog and an internal YTsaurus table). The first
 author confirmed this on the adapter PR and suggested having a standard code
 agent zero-shot the benchmark instead. `reference-harness.patch` (one commit
-on top of `JetBrains-Research/git-good-bench@b11ae6c`) fills in exactly the
+on top of `JetBrains-Research/git-good-bench@b11ae6cd92be2b8b96e237d379427e04ad59c455`,
+published as the `harbor-parity` branch of
+[YanggWendy/git-good-bench](https://github.com/YanggWendy/git-good-bench/tree/0375616a91a58e495b370908918d01991bc6ebf4))
+fills in exactly the
 two missing pieces and leaves the scenario setup
 (`ScenarioEnvironmentManager`) and the scoring (`Evaluator`) untouched:
 
@@ -56,8 +59,8 @@ providers that support the Responses API.
 ## Running the original side
 
 ```bash
-git clone https://github.com/JetBrains-Research/git-good-bench.git
-cd git-good-bench && git am path/to/reference-harness.patch
+git clone https://github.com/YanggWendy/git-good-bench.git
+cd git-good-bench && git checkout 0375616a91a58e495b370908918d01991bc6ebf4  # branch harbor-parity
 docker build -f docker/cli-agent.Dockerfile -t gitgoodbench-cli-agent .
 pip install docker datasets "mini-swe-agent==2.4.6" "litellm==1.91.1"  # host side
 
@@ -150,6 +153,30 @@ harbor-framework/harbor#3867).
   commit-graph, or wrote into the object store (trajectory scan; the only
   mentions are read-only inspections such as `git replace -l`), so the
   current verifier grades them the same.
+
+  The parent requirement decided no verdict on either side, so both sides
+  measure the same quantity (tree equality with the ground-truth merge):
+
+  | Side | Runs | Solved | Verdicts decided by the parent requirement |
+  |------|------|--------|--------------------------------------------|
+  | Harbor | 180 | 75 | 0 (all 105 unsolved runs fail the tree comparison) |
+  | Original | 180 | 73 | 0 (all 73 solved runs have both parents in their history) |
+
+  Harbor side: every `verifier/details.json` has an empty
+  `parents_not_in_history`, so grading these runs with the original's rule
+  (tree only) gives the same 75/180. Original side: the harness does not
+  record the parents of the final commit, so this is read from the
+  trajectories: in all 73 solved runs the output shows the merge in progress
+  and then a commit on `current-scenario-branch`, and none runs `git merge
+  --abort`, `git reset`, `git rebase`, `git cherry-pick`, `git stash`,
+  `git commit --amend`, `git update-ref` or `git commit-tree`, so each
+  solved run concluded the merge it was given.
+
+  The Harbor runs were not re-graded or re-run after the verifier change.
+  The final repository states were not archived (the sandboxes are deleted),
+  so a literal re-grade is not possible, and a re-run would only repeat the
+  comparison above: the two verifiers differ only in how they read the
+  commits, and no run touched what that affects.
 * **Git version / architecture.** Original side: Git 2.43 on ubuntu:24.04
   (arm64) in our runs; Harbor side: Git 2.39 on python:3.12-slim-bookworm
   (Daytona, x86_64). Both use the `ort` merge strategy.
