@@ -4,14 +4,14 @@
 
 GitGoodBench evaluates AI agents on version-control (Git) tasks mined from permissively licensed, open-source Python, Java, and Kotlin repositories on GitHub. The benchmark defines three scenarios: merge conflict resolution, interactive rebase, and iterative committing of changes. **This adapter converts the merge conflict resolution scenario**: a real merge was started and stopped with conflicts, and the agent must resolve all conflicts and conclude the merge. The result is scored by exact match against the ground-truth merge commit.
 
-| Split | HuggingFace dataset | Merge samples | Harbor tasks |
-|-------|---------------------|---------------|--------------|
-| `lite` (default) | [`JetBrains/git_good_bench-lite`](https://huggingface.co/datasets/JetBrains/git_good_bench-lite) | 60 (20 per language) | **60** |
-| `full` | [`JetBrains/git_good_bench`](https://huggingface.co/datasets/JetBrains/git_good_bench) | 450 (150 per language) | **450** |
+| Split | HuggingFace dataset | Samples | `merge` (adapted) | `file_commit_chain` (not adapted) |
+|-------|---------------------|---------|-------------------|-----------------------------------|
+| `lite` (default) | [`JetBrains/git_good_bench-lite`](https://huggingface.co/datasets/JetBrains/git_good_bench-lite) | 120 | **60** (20 per language) | 60 |
+| `full` | [`JetBrains/git_good_bench`](https://huggingface.co/datasets/JetBrains/git_good_bench) | 900 | 450 (150 per language) | 450 |
 
-Each `merge` sample becomes one task; nothing else is filtered. GitGoodBench Lite is the split on which the paper reports its baseline, and it is the split this adapter registers first. Lite is not a subset of the full dataset (the two were sampled separately from the same pool), so the full split is generated as a separate dataset (`datasets/gitgoodbench-full`) and will be registered in a follow-up.
+Every `merge` sample becomes one Harbor task, so GitGoodBench Lite gives the **60 tasks** of this adapter (`jetbrains/gitgoodbench`). Lite is the split on which the paper reports its baseline. The full split can be generated with `--split full` (450 tasks, a separate sample of the same pool rather than a superset of Lite); it is not registered and has no parity run.
 
-**Excluded:** the `file_commit_chain` samples (60 in Lite, 450 in the full dataset), which the original harness evaluates in two scenarios, interactive rebase and iterative committing. Both are scored by an LLM judge that only rewards a Git history that is judged *better* than the original developer's history, so no oracle solution can reach a reward of 1 under the original criterion. Adapting them is deferred until the scoring criterion for CLI agents is settled with the benchmark authors (see the discussion on the adapter PR). The training split (`JetBrains/git_good_bench-train`) is not adapted. The datasets are licensed Apache-2.0; the source repositories carry Apache-2.0, MIT, or BSD licenses.
+**Not adapted:** the `file_commit_chain` samples, 60 in Lite and 450 in the full dataset. The original harness uses them for its two other scenarios, interactive rebase and iterative committing, which are scored by an LLM judge instead of exact match. That judge only rewards a Git history it considers *better* than the original developer's, so no oracle solution can reach a reward of 1 there. They are deferred until the scoring criterion for CLI agents is settled with the benchmark authors (see the discussion on the adapter PR). The merge tasks adapted here involve no LLM judge. The training split (`JetBrains/git_good_bench-train`) is not adapted either. The datasets are licensed Apache-2.0; the source repositories carry Apache-2.0, MIT, or BSD licenses.
 
 Main modifications for adaptation: the original baseline agent used custom tools (e.g. `resolve_current_merge_conflict_with`), while Harbor agents work in a shell, so the section of the original prompt that describes those tools is replaced by where the checkout is and how to conclude the merge (the rest of the prompt, including the quoted conflict hunks, is kept verbatim), and ground-truth Git objects are purged from the task image (see [Notes & Caveats](#notes--caveats)).
 
@@ -162,7 +162,7 @@ Tasks are written with one directory per task. Each task follows the structure s
 
 The original baseline agent is not publicly runnable (the released `src/agent_client` has its LLM client, agent loop and internal data source removed, as confirmed by the benchmark's first author on the adapter PR), so this is a Scenario 2/3 adapter: the original side of the parity experiment is a reconstructed reference harness that fills in those two pieces and runs a standard CLI coding agent inside the original scenario container, with the original scenario setup (`ScenarioEnvironmentManager`) and scoring (`Evaluator`) unchanged. The harness is a single commit on top of upstream, shipped as [`parity/reference-harness.patch`](parity/reference-harness.patch); [`parity/README.md`](parity/README.md) describes it, how to run both sides, and the known differences between them.
 
-Parity setup (agreed plan): mini-swe-agent 2.4.6 with `deepseek-v4-1-flash-260910` on both sides, requested through the 2077AI parity gateway under its name for the model, `deepseek-v4.1-flash`; every response of the 360 runs reports the dated id (chat completions; Codex CLI cannot be used because it no longer supports chat completions and the gateway has no Responses API for this model), 3 runs over the 60 Lite merge tasks, solve rate as the metric.
+Parity setup: mini-swe-agent 2.4.6 with `deepseek-v4-1-flash-260910` (requested as `deepseek-v4.1-flash`) on both sides, 3 runs over the 60 Lite merge tasks, solve rate as the metric.
 
 | Agent | Model | Metric | Runs | Dataset Size | Original (mean ± SEM) | Harbor (mean ± SEM) |
 |-------|-------|--------|------|--------------|-----------------------|---------------------|
@@ -170,16 +170,16 @@ Parity setup (agreed plan): mini-swe-agent 2.4.6 with `deepseek-v4-1-flash-26091
 
 Per-run scores (solve rate in %): original 36.67, 41.67, 43.33; Harbor 40.00, 43.33, 41.67. The run ranges overlap (sample standard deviations 3.47 and 1.67). Links: [original benchmark](https://github.com/JetBrains-Research/git-good-bench) (`b11ae6cd92be2b8b96e237d379427e04ad59c455`), [fork with the reference harness](https://github.com/YanggWendy/git-good-bench/tree/0375616a91a58e495b370908918d01991bc6ebf4) (branch `harbor-parity`: that commit plus [`parity/reference-harness.patch`](parity/reference-harness.patch), with the reproduction steps in its README), [adapter PR](https://github.com/harbor-framework/adapters/pull/78); [dataset PR](https://github.com/harbor-framework/harbor-datasets/pull/277) (harbor-datasets); [HuggingFace parity-experiments PR](https://huggingface.co/datasets/harborframework/parity-experiments/discussions/281). The shared parity repository is over the Hub's file-count limit and refuses uploads at the moment, so the result files are published in the same layout at [yanggwendy/gitgoodbench-parity](https://huggingface.co/datasets/yanggwendy/gitgoodbench-parity/tree/main/adapters/gitgoodbench) until they can be pushed to that PR.
 
-Both sides see the same prompt (the original merge prompt with the conflict hunks and the temporal ordering of the parents inline), run the agent's commands with the same shell, and cannot reach the ground-truth merge commit. Per language the original side scores Java 25.0%, Kotlin 46.7%, Python 50.0% and the Harbor side Java 25.0%, Kotlin 50.0%, Python 50.0%; 52 of the 60 tasks have the same outcome in all three runs on both sides. An earlier, non-aligned run of the original harness on a full clone scored 70.00%, but the agent looked the merge commit up in 75 of its 180 runs; that run and the alignment steps are documented in [`parity/README.md`](parity/README.md) together with the per-run numbers and the leakage scans.
+Both sides see the same prompt (the original merge prompt with the conflict hunks and the temporal ordering of the parents inline), run the agent's commands with the same shell, and cannot reach the ground-truth merge commit. Per language the original side scores Java 25.0%, Kotlin 46.7%, Python 50.0% and the Harbor side Java 25.0%, Kotlin 50.0%, Python 50.0%; 52 of the 60 tasks have the same outcome in all three runs on both sides. The setup of both sides, their known differences and the per-run results are in [`parity/README.md`](parity/README.md).
 
-Environment and verifier checks on both sides (1 run each):
+Environment and verifier checks on both sides (1 run each). The merge tasks are scored by exact match against the ground-truth merge, with no LLM judge, so the oracle is expected to reach 100%:
 
 | Side | Oracle (expected 100%) | Negative controls (expected 0%) |
 |------|------------------------|----------------------------------|
 | Original side (reference harness) | 60/60 | no-op agent 0/2 (smoke samples) |
-| Harbor adapter (Daytona) | 60/60, no exceptions | no-op agent, leftover conflict markers, deleted `.git`, correct tree committed without the merge, hostile Git configuration and hooks, head replaced through `refs/replace` (wrong tree behind a correct replacement; missing parent supplied by a replacement), forged commit-graph, tampered commit object: all 0. A reward of 1 planted in `/logs/verifier` while the agent works (the directory is writable then): 0 with the merge left untouched, and no reward at all (the trial ends with a verifier error) when Git is removed from the container as well |
+| Harbor adapter (Daytona) | 60/60, no exceptions | all rejected: no-op agent, leftover conflict markers, deleted `.git`, correct tree committed without the merge, hostile Git configuration and hooks, replaced or forged history (`refs/replace`, commit-graph, tampered commit object), reward of 1 planted in `/logs/verifier` before grading |
 
-The negative controls are also unit tests that run the task's `tests/evaluate.py` on local merge scenarios built like the task image ([`tests/test_gitgoodbench_verifier.py`](tests/test_gitgoodbench_verifier.py)): the states above plus a deleted branch, a wrong resolution, a grafts file and an inherited `GIT_GRAFT_FILE` are rejected, and a concluded merge with the ground-truth tree is accepted with loose refs, with packed refs, after `git gc` and with further commits on top. In the four Daytona controls with a replacement, a forged commit-graph or a tampered commit, Git itself (2.39.5 in the task image) reports the ground-truth tree or the incoming parent in the history of the branch; the verifier does not follow it. The reward file has its own tests: a reward planted in the log directory before grading is replaced by the verdict, does not survive a verifier error or a crashing verifier (Git removed from the machine), and is removed by `tests/test.sh` before the verifier starts. The generator is covered by [`tests/test_gitgoodbench.py`](tests/test_gitgoodbench.py): the replayed conflict hunks are the same with a user or system `merge.conflictStyle`, with configuration passed through the environment and with a user attributes file that changes the marker size or resolves the conflict by union, and a replay that disagrees with the dataset is an error.
+The same controls are unit tests that run the task's `tests/evaluate.py` on local merge scenarios built like the task image ([`tests/test_gitgoodbench_verifier.py`](tests/test_gitgoodbench_verifier.py)), and [`tests/test_gitgoodbench.py`](tests/test_gitgoodbench.py) covers the generator. With the reward planted and Git removed from the container as well, the verifier cannot run and the trial ends with a verifier error and no reward. [Notes & Caveats](#notes--caveats) describes what the verifier guards against.
 
 Reproduction requirements and steps:
 - Original side (reference harness; details in `parity/README.md`):
@@ -188,15 +188,15 @@ Reproduction requirements and steps:
   git checkout 0375616a91a58e495b370908918d01991bc6ebf4  # branch harbor-parity
   docker build -f docker/cli-agent.Dockerfile -t gitgoodbench-cli-agent .
   pip install docker datasets "mini-swe-agent==2.4.6" "litellm==1.91.1"
-  export OPENAI_API_KEY=<parity gateway key> OPENAI_BASE_URL=https://app-us.ppapi.ai/v1
+  export OPENAI_API_KEY=<key> OPENAI_BASE_URL=<OpenAI-compatible endpoint>
   python -m src.agent_client.run_cli_agent_benchmark --agent mini-swe-agent \
       --model openai/deepseek-v4.1-flash --image gitgoodbench-cli-agent \
       --hide-ground-truth --runs 3 --run-name mswea-deepseek-v4.1-flash-aligned
   python -m src.agent_client.summarize_cli_agent_results results/mswea-deepseek-v4.1-flash-aligned/results.jsonl
   ```
-- Harbor side (3 attempts on Daytona, gateway host allowed during the agent phase; `parity/README.md` gives the Harbor commit and the one-line litellm pin of the parity runs):
+- Harbor side (3 attempts on Daytona; the job file allows the endpoint's host during the agent phase through `extra_allowed_hosts`):
   ```bash
-  export OPENAI_API_KEY=<parity gateway key> OPENAI_BASE_URL=https://app-us.ppapi.ai/v1
+  export OPENAI_API_KEY=<key> OPENAI_BASE_URL=<OpenAI-compatible endpoint>
   harbor run -c src/gitgoodbench/parity/run_gitgoodbench_parity.yaml
   ```
 - The reported metric is the solve rate: the mean reward over all tasks, averaged over runs.
@@ -224,7 +224,7 @@ uv remove datasets  # remove a dependency
 
 Environment setup:
 - Docker installed and running
-- Harbor 0.21.0 or newer installed and working (see main repository README). The tasks use task schema 1.4 with a `version` under `[task]`, which 0.21.0 is the first release to read (0.20.0 loads the file but ignores that field), and they restrict the agent phase with `[agent] network_mode = "allowlist"`, which that release reads as well. To run mini-swe-agent use 0.26.0 or newer, the first release whose install of the agent works with current litellm (harbor-framework/harbor#3867). The parity runs used Harbor at `357c5e74020fc0890d69fb3a7db610896b9ce57d` (between 0.24.0 and 0.25.0) with litellm pinned as described in [`parity/README.md`](parity/README.md)
+- Harbor 0.21.0 or newer installed and working (see main repository README); the tasks use task schema 1.4. To run mini-swe-agent use 0.26.0 or newer
 - Python environment with dependencies:
   ```bash
   cd src/gitgoodbench
@@ -279,6 +279,4 @@ This adapter is developed and maintained by [Wenting Yang](mailto:yanggwendy0213
 
 ## Acknowledgement
 
-If you used API keys provided via [adapters/parity_api_instructions.md](../parity_api_instructions.md) for running parity experiments, please include the following acknowledgement:
-
-> API inference compute for running parity tests is generously supported by [2077AI](https://www.2077ai.com/) (https://www.2077ai.com/).
+API inference compute for running parity tests is generously supported by [2077AI](https://www.2077ai.com/) (https://www.2077ai.com/).
