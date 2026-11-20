@@ -94,93 +94,63 @@ and newer install the agent without that change.
 ## Known differences between the two sides
 
 * **Repository content and network.** The original harness clones the
-  complete repository, so the ground-truth merge commit is present in the
-  container, the `origin` remote points at GitHub and the agent has
-  unrestricted network access. The Harbor image only contains the history
-  needed by the scenario, purges the ground-truth objects and restricts the
-  agent's egress to model APIs. A CLI agent on the original side can look
-  the answer up (`git log --all`, `git rev-list --all --children`,
-  `git ls-remote origin`, cloning the repository from GitHub).
-  `--hide-ground-truth` removes the difference: before the agent runs, the merge commit is exported to a
-  bundle that stays on the host, every ref except `current-scenario-branch`
-  and the incoming parent is deleted, the `origin` remote is removed, the
-  reflogs are expired, the clone is pruned and the container is detached
-  from its Docker networks (the agent's model calls go through the host);
-  the bundle is fetched back and the network restored before the Evaluator
-  runs. The parity runs use this mode.
-* **Prompt.** None: `instruction.md` is
-  the prompt of the reference harness verbatim (the original
-  `PromptProvider` text with the custom-tool section replaced by where the
-  checkout is and how to conclude the merge), including the temporal
-  ordering of the parents and every conflict hunk in `<CONFLICT-i>` tags.
-  The reference harness extracts the hunks from the working tree after
-  `git merge`; the adapter replays the same merge with `git merge-tree` at
-  task-generation time and extracts them the same way. The replay uses
-  Git's defaults (no configuration or attributes file of the generating
-  machine is read) and fails if it disagrees with the dataset about the
-  conflicted files it lists or the number of hunks. The instructions of
-  all 60 Lite tasks are identical to the prompts the reference harness wrote
-  for them, except for the repository path (`/workspace/repo` instead of
-  `/usr/code/<repository>`).
+  complete repository, so the ground-truth merge commit is in the container,
+  the `origin` remote points at GitHub and the agent has open network access.
+  The Harbor image contains only the history the scenario needs and
+  restricts the agent to model APIs. `--hide-ground-truth` gives the original
+  side the same conditions: before the agent runs, the merge commit is moved
+  to a bundle on the host, every ref except `current-scenario-branch` and the
+  incoming parent is deleted, the `origin` remote is removed and the
+  container is detached from its networks (the agent's model calls go through
+  the host). The bundle is fetched back before the Evaluator runs. The parity
+  runs use this mode.
+* **Prompt.** None. `instruction.md` is the prompt of the reference harness:
+  the original `PromptProvider` text with the custom-tool section replaced,
+  including the temporal order of the parents and every conflict hunk in
+  `<CONFLICT-i>` tags. The harness reads the hunks from the working tree
+  after `git merge`; the adapter replays the merge with `git merge-tree` at
+  generation time. The instructions of all 60 tasks are identical to the
+  prompts the harness wrote, except for the repository path
+  (`/workspace/repo` instead of `/usr/code/<repository>`).
 * **Ref of the incoming parent.** Both sides keep the incoming parent
-  reachable through a ref while the merge is in progress. In the parity runs
-  it was called `refs/gitgoodbench/incoming` on both sides. The Harbor tasks
-  were changed on 2026-11-15, after the parity runs, to call it
-  `refs/scenario/incoming`, so that no ref in the task repository names the
-  benchmark; the reference harness keeps the name the runs used. The
-  instruction never mentions the ref. Its name shows up in the transcript of
-  64 of the 180 runs on each side (for example in `git log --all` or
-  `git branch -a` output), and the agent typed it in a command in 14
-  original and 6 Harbor runs, as a handle for the incoming commit, which
-  `MERGE_HEAD` and the conflict markers name as well.
+  reachable through a ref. In the parity runs it was
+  `refs/gitgoodbench/incoming` on both sides. The Harbor tasks renamed it to
+  `refs/scenario/incoming` on 2026-11-15, after the parity runs, so that no
+  ref names the benchmark. The reference harness keeps the old name. The
+  instruction does not mention the ref; its name appears in the transcripts
+  of 64 of the 180 runs on each side.
 * **Shell.** Both sides execute the agent's commands with `/bin/sh -c`:
   mini-swe-agent's `LocalEnvironment` inside the Harbor sandbox, and the
   harness's `ExistingContainerEnvironment` through `docker exec`.
-* **Container reuse.** Harbor gives every trial a fresh sandbox; the
-  reference harness, like the original, reuses one container per process
-  for all samples and runs. A command that mini-swe-agent times out (for
-  example `grep -rl ... /`) keeps running inside the container after the
-  `docker exec` client is killed and competed for CPU with later runs; the
-  harness now kills every process the agent left behind after each run.
-  During the parity runs two such leftovers were killed by hand after about
-  30 and 55 minutes.
-* **Scoring.** The adapter compares the committed tree with the ground-truth
-  tree and additionally requires both merge parents in the branch history;
-  the original only diffs the branch against the ground-truth commit (a
-  plain commit of the right tree on top of an aborted merge would pass there).
-  The adapter also takes the tree and the history from the commit objects
-  themselves (read with `git cat-file` and checked against their ids), while
-  the original asks Git inside the agent's repository, where a replacement
-  ref or a commit-graph can stand in for the commits on the branch. The
-  parity runs were graded before that change (2026-11-11). None of the 180
-  Harbor runs created a replacement ref, a grafts or shallow file or a
-  commit-graph, or wrote into the object store (trajectory scan; the only
-  mentions are read-only inspections such as `git replace -l`), so the
-  current verifier grades them the same.
-
-  The parent requirement decided no verdict on either side, so both sides
-  measure the same quantity (tree equality with the ground-truth merge):
+* **Container reuse.** Harbor gives every trial a fresh sandbox. The
+  reference harness, like the original, reuses one container per process. A
+  command that mini-swe-agent times out keeps running in that container, so
+  the harness kills leftover processes after each run. In the parity runs
+  two leftovers were killed by hand, after about 30 and 55 minutes.
+* **Scoring.** The original harness requires `git diff <merge commit>
+  current-scenario-branch` to be empty. The adapter compares the same trees
+  and also requires both merge parents in the branch history. That extra
+  requirement decided no verdict on either side:
 
   | Side | Runs | Solved | Verdicts decided by the parent requirement |
   |------|------|--------|--------------------------------------------|
   | Harbor | 180 | 75 | 0 (all 105 unsolved runs fail the tree comparison) |
   | Original | 180 | 73 | 0 (all 73 solved runs have both parents in their history) |
 
-  Harbor side: every `verifier/details.json` has an empty
-  `parents_not_in_history`, so grading these runs with the original's rule
-  (tree only) gives the same 75/180. Original side: the harness does not
-  record the parents of the final commit, so this is read from the
-  trajectories: in all 73 solved runs the output shows the merge in progress
-  and then a commit on `current-scenario-branch`, and none runs `git merge
-  --abort`, `git reset`, `git rebase`, `git cherry-pick`, `git stash`,
-  `git commit --amend`, `git update-ref` or `git commit-tree`, so each
-  solved run concluded the merge it was given.
+  On the Harbor side `parents_not_in_history` is empty in every
+  `verifier/details.json`. The original harness does not record the parents
+  of the final commit, so that side is read from the trajectories: all 73
+  solved runs commit while the merge is in progress, and none aborts, resets
+  or rewrites it.
 
-  The Harbor runs were not re-graded or re-run after the verifier change.
-  The final repository states were not archived (the sandboxes are deleted),
-  so a literal re-grade is not possible, and a re-run would only repeat the
-  comparison above: the two verifiers differ only in how they read the
-  commits, and no run touched what that affects.
+  The verifier was hardened on 2026-11-11, after the parity runs. It now
+  reads the commits from the object store and checks them against their
+  hashes instead of asking Git, which a replacement ref or a commit-graph can
+  mislead. The 180 Harbor runs were graded by the earlier version and have
+  not been re-graded, because their final repository states were not
+  archived. Their trajectories contain no replacement ref, grafts file,
+  commit-graph or write to the object store, the cases in which the two
+  versions differ.
 * **Git version / architecture.** Original side: Git 2.43 on ubuntu:24.04
   (arm64) in our runs; Harbor side: Git 2.39 on python:3.12-slim-bookworm
   (Daytona, x86_64). Both use the `ort` merge strategy.
