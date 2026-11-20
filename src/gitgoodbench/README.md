@@ -2,24 +2,21 @@
 
 ## Overview
 
-GitGoodBench evaluates AI agents on version-control (Git) tasks mined from permissively licensed, open-source Python, Java, and Kotlin repositories on GitHub. The benchmark defines three scenarios: merge conflict resolution, interactive rebase, and iterative committing of changes. **This adapter converts the merge conflict resolution scenario**: a real merge was started and stopped with conflicts, and the agent must resolve all conflicts and conclude the merge. The result is scored by exact match against the ground-truth merge commit.
+GitGoodBench evaluates AI agents on version-control (Git) tasks mined from permissively licensed, open-source Python, Java, and Kotlin repositories on GitHub. **This adapter converts its merge conflict resolution scenario**: a real merge was started and stopped with conflicts, and the agent must resolve all conflicts and conclude the merge. The result is scored by exact match against the ground-truth merge commit.
 
-| Split | HuggingFace dataset | Samples | `merge` (adapted) | `file_commit_chain` (not adapted) |
-|-------|---------------------|---------|-------------------|-----------------------------------|
-| `lite` (default) | [`JetBrains/git_good_bench-lite`](https://huggingface.co/datasets/JetBrains/git_good_bench-lite) | 120 | **60** (20 per language) | 60 |
-| `full` | [`JetBrains/git_good_bench`](https://huggingface.co/datasets/JetBrains/git_good_bench) | 900 | 450 (150 per language) | 450 |
+| Split | HuggingFace dataset | Harbor tasks |
+|-------|---------------------|--------------|
+| `lite` | [`JetBrains/git_good_bench-lite`](https://huggingface.co/datasets/JetBrains/git_good_bench-lite) | **60** merge conflict tasks (20 each for Python, Java and Kotlin) |
 
-Every `merge` sample becomes one Harbor task, so GitGoodBench Lite gives the **60 tasks** of this adapter (`jetbrains/gitgoodbench`). Lite is the split on which the paper reports its baseline. The full split can be generated with `--split full` (450 tasks, a separate sample of the same pool rather than a superset of Lite); it is not registered and has no parity run.
-
-**Not adapted:** the `file_commit_chain` samples, 60 in Lite and 450 in the full dataset. The original harness uses them for its two other scenarios, interactive rebase and iterative committing, which are scored by an LLM judge instead of exact match. That judge only rewards a Git history it considers *better* than the original developer's, so no oracle solution can reach a reward of 1 there. They are deferred until the scoring criterion for CLI agents is settled with the benchmark authors (see the discussion on the adapter PR). The merge tasks adapted here involve no LLM judge. The training split (`JetBrains/git_good_bench-train`) is not adapted either. The datasets are licensed Apache-2.0; the source repositories carry Apache-2.0, MIT, or BSD licenses.
+Each `merge` sample of GitGoodBench Lite becomes one Harbor task (`jetbrains/gitgoodbench`). Lite is the split on which the paper reports its baseline. Only the `merge` samples are converted; the benchmark's other sample type, `file_commit_chain`, is outside the scope of this adapter. The datasets are licensed Apache-2.0; the source repositories carry Apache-2.0, MIT, or BSD licenses.
 
 Main modifications for adaptation: the original baseline agent used custom tools (e.g. `resolve_current_merge_conflict_with`), while Harbor agents work in a shell, so the section of the original prompt that describes those tools is replaced by where the checkout is and how to conclude the merge (the rest of the prompt, including the quoted conflict hunks, is kept verbatim), and ground-truth Git objects are purged from the task image (see [Notes & Caveats](#notes--caveats)).
 
 ## What is GitGoodBench?
 
-GitGoodBench ([paper](https://aclanthology.org/2025.realm-1.19/), [repository](https://github.com/JetBrains-Research/git-good-bench)) was introduced by JetBrains Research at the 1st Workshop for Research on Agent Language Models (REALM 2025, co-located with ACL 2025). It targets a gap in software-engineering agent benchmarks such as SWE-bench, which overlook developer workflows around version control. Scoring of the merge conflict resolution scenario in the original benchmark is exact match (EM): the scenario is solved if no conflict remains and `git diff <ground-truth merge commit> current-scenario-branch` is empty. The other two scenarios use an LLM-as-a-judge comparison against the original history.
+GitGoodBench ([paper](https://aclanthology.org/2025.realm-1.19/), [repository](https://github.com/JetBrains-Research/git-good-bench)) was introduced by JetBrains Research at the 1st Workshop for Research on Agent Language Models (REALM 2025, co-located with ACL 2025). It targets a gap in software-engineering agent benchmarks such as SWE-bench, which overlook developer workflows around version control. Scoring of the merge conflict resolution scenario in the original benchmark is exact match (EM): the scenario is solved if no conflict remains and `git diff <ground-truth merge commit> current-scenario-branch` is empty.
 
-The paper reports a 13.33% solve rate on the 60 Lite merge scenarios for a GPT-4o baseline with custom tools (21.11% over all 180 Lite scenarios).
+The paper reports a 13.33% solve rate on the 60 Lite merge scenarios for a GPT-4o baseline with custom tools.
 
 ## Adapter Features
 
@@ -140,7 +137,7 @@ uv sync
 # GitGoodBench Lite (60 merge tasks) -> datasets/gitgoodbench
 uv run gitgoodbench
 
-# Full GitGoodBench (450 merge tasks) -> datasets/gitgoodbench-full
+# Full GitGoodBench (450 merge tasks, not part of the registered dataset) -> datasets/gitgoodbench-full
 uv run gitgoodbench --split full
 ```
 
@@ -172,7 +169,7 @@ Per-run scores (solve rate in %): original 36.67, 41.67, 43.33; Harbor 40.00, 43
 
 Both sides see the same prompt (the original merge prompt with the conflict hunks and the temporal ordering of the parents inline), run the agent's commands with the same shell, and cannot reach the ground-truth merge commit. Per language the original side scores Java 25.0%, Kotlin 46.7%, Python 50.0% and the Harbor side Java 25.0%, Kotlin 50.0%, Python 50.0%; 52 of the 60 tasks have the same outcome in all three runs on both sides. The setup of both sides, their known differences and the per-run results are in [`parity/README.md`](parity/README.md).
 
-Environment and verifier checks on both sides (1 run each). The merge tasks are scored by exact match against the ground-truth merge, with no LLM judge, so the oracle is expected to reach 100%:
+Environment and verifier checks on both sides (1 run each). The tasks are scored by exact match against the ground-truth merge, so the oracle is expected to reach 100%:
 
 | Side | Oracle (expected 100%) | Negative controls (expected 0%) |
 |------|------------------------|----------------------------------|
@@ -203,7 +200,6 @@ Reproduction requirements and steps:
 
 ## Notes & Caveats
 
-- **Scope.** Only the merge conflict resolution scenario is adapted. The interactive rebase and iterative committing scenarios of the original benchmark are scored by an LLM judge that requires the agent's history to be judged better than the original developer's history in both presentation orders; an oracle that reproduces the original history therefore cannot score 1. Those scenarios are deferred until the criterion for CLI agents is settled with the authors. The full three-scenario implementation is available in the adapter PR history.
 - **Tool interface.** The original baseline agent acted through custom tools; Harbor agents use a shell. The instruction is otherwise the original prompt: the temporal ordering of the two parents, the list of conflicted files and every conflicting hunk (quoted at task-generation time by replaying the merge with `git merge-tree`, exactly as the original harness quotes them after `git merge`), the original resolution instructions (cohesive resolution, minimal changes, exact whitespace when keeping one side), and, instead of the custom-tool section, where the checkout is and how to conclude the merge.
 - **Merge success check.** The original harness treats a scenario as unsolved if `git status` mentions `unmerged` or `conflict`, and otherwise compares the trees of the branch head and the ground-truth merge commit. The adapter compares the same trees (an uncommitted or conflicted merge leaves the head at the first parent, so it scores 0 either way) and additionally requires both merge parents to be ancestors of the branch head, so that the right tree committed on top of an aborted merge does not count as a resolved merge. Verification only looks at committed objects; the index and working tree are not consulted.
 - **Verifier isolation.** The verifier never runs Git inside `/workspace/repo`. It writes the id of the graded branch into a throw-away `GIT_DIR` (no other ref of the agent's repository is taken over), points `GIT_OBJECT_DIRECTORY` at the agent's object store, ignores the system and global Git configuration and every inherited `GIT_*` variable, and only uses plumbing commands, so `.git/config` settings or hooks written by the agent are never executed during grading. The log directory can be written while the agent works, so `tests/test.sh` and the verifier both remove any `reward.txt` or `reward.json` found there before grading, and a verifier that stops without a verdict (an infrastructure error or a crash) leaves no reward behind.

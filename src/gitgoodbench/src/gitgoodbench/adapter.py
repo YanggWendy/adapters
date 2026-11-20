@@ -7,9 +7,6 @@ This adapter converts the ``merge`` samples: a real merge was started and stoppe
 with conflicts, and the agent must resolve them and conclude the merge. The
 result is scored by exact match against the ground-truth merge commit.
 
-The ``file_commit_chain`` samples (interactive rebase / iterative committing,
-scored by an LLM judge) are not converted; see the README for the rationale.
-
 Task generation needs ``git`` and network access to GitHub: for every task the
 ground-truth merge commit is fetched once into a scratch repository to produce
 ``solution/ground_truth.bundle`` (used by the oracle), the ground-truth tree

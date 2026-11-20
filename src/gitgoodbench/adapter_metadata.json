@@ -13,7 +13,7 @@
           "mini-swe-agent@2.4.6"
         ],
         "adaptable": true,
-        "notes": "JetBrains/git_good_bench-lite merge scenarios (60 of 120 samples; the paper reports its GPT-4o baseline on this split). The released baseline agent is not runnable (internal Koog-based agent, LLM client and data source removed), as confirmed by the first author on the adapter PR; the agent listed is supported by the reconstructed reference harness (https://github.com/YanggWendy/git-good-bench/tree/0375616a91a58e495b370908918d01991bc6ebf4: parity/reference-harness.patch on JetBrains-Research/git-good-bench@b11ae6cd92be2b8b96e237d379427e04ad59c455), which also carries a Codex CLI agent for providers with a Responses API. The 60 file_commit_chain samples (interactive rebase / iterative committing, LLM-judge scored) are not adapted."
+        "notes": "JetBrains/git_good_bench-lite merge scenarios (60 of 120 samples; the paper reports its GPT-4o baseline on this split). The released baseline agent is not runnable (internal Koog-based agent, LLM client and data source removed), as confirmed by the first author on the adapter PR; the agent listed is supported by the reconstructed reference harness (https://github.com/YanggWendy/git-good-bench/tree/0375616a91a58e495b370908918d01991bc6ebf4: parity/reference-harness.patch on JetBrains-Research/git-good-bench@b11ae6cd92be2b8b96e237d379427e04ad59c455), which also carries a Codex CLI agent for providers with a Responses API."
       },
       {
         "split": "full",
